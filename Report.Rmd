@@ -1,0 +1,229 @@
+---
+title: "Prediction of default loans"
+author: "Bhanuday Birla"
+date: "10 April 2017"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+
+The objective of this document is to find out patterns and insights in the Lending Club data of borrowers and also to build a model to accurately predict loan default cases.
+    Now lets load data and see the dimensional size of the data.
+
+```{r cars }
+setwd('D:\\Data Science\\Loan Prediction')
+train=read.csv("loan.csv")
+dim(train)
+```
+There are 74 different dimentions and 887379 rows in the data. By looking into data dictionary of the given data, we understand various columns' meaning here. The data is about the borrowers profile, fico score, grades provided by company and other minute details about credit history of the borrower. On the basis of these details and standard scores like fico score and grades we need to predict whether a loan wil finally end up defaulted or fully paid. Before we build any model, we need to explore and understand data patterns. But before that we need to make response variable in out data set.
+
+```{r dataprep}
+library(plyr)
+count(train,'loan_status')
+sum(is.na(train$loan_status))
+```
+
+
+ There no null values in loan_status variable. We need to drop observations related to 'Issued' loan status as it is issued and we are not sure if it is default or not. Also we will make a variable named Default which will have a value of 1 for default cases and 0 otherwise.
+
+```{r datafilter }
+train<-train[train['loan_status']!='Issued',]
+default <- c("Charged Off",
+                    "Default",
+                    "Does not meet the credit policy. Status:Charged Off", 
+                    "Late (16-30 days)",
+                    "Late (31-120 days)")
+train['Default'] <- ifelse(train$loan_status  %in% default, 1,0)
+```
+
+Now lets examine observations with null values and try to fix those or remove those rows in order to retain meaningful data.
+```{r null }
+NullValues<-colSums(is.na(train))
+NullValues
+```
+                                                                                                       
+We can see that there are many variables with null values. We will remove the columns with more than 400000 null values(~45% of total values). Such columns are listed below:
+
+```{r}
+RemoveColl<-NullValues[NullValues>400000]
+RemoveColl
+RemoveColl<-as.vector(names(RemoveColl))
+train<-train[,!(names(train) %in% RemoveColl)]
+```
+There are columns with lesser missing values. We will examine their importance and fill approprite values.
+Now lets see number of default cases and dependency of grades and interest rates on loan prediction.
+```{r}
+count(train,'Default')
+library(ggplot2)
+p <- ggplot(train, aes(grade,int_rate))
+p + geom_boxplot()
+q<-ggplot(train, aes(factor(Default),int_rate))
+q + geom_boxplot()
+```
+Around 7% of cases are default. And risky accounts are charged higher interest rates and having lower grades(like f,g). Lets examine the missing values varibles one by one and fill values.
+inq_last_6mths
+open_acc
+pub_rec
+revol_util
+total_acc
+total_rev_hi_lim  
+acc_now_delinq
+tot_coll_amt
+tot_cur_bal
+```{r}
+p <- ggplot(train, aes(factor(inq_last_6mths),int_rate))
+p + geom_boxplot()
+chisq.test(table(train[!is.na(train['inq_last_6mths']),c("Default","inq_last_6mths")]))
+chisq.test(table(train[!is.na(train['open_acc']),c("Default","open_acc")]))
+chisq.test(table(train[!is.na(train['pub_rec']),c("Default","pub_rec")]))
+chisq.test(table(train[!is.na(train['total_acc']),c("Default","total_acc")]))
+chisq.test(table(train[!is.na(train['acc_now_delinq']),c("Default","acc_now_delinq")]))
+p <- ggplot(train, aes(factor(Default),revol_util))
+p + geom_boxplot()
+p <- ggplot(train, aes(factor(Default),total_rev_hi_lim ))
+p + geom_boxplot()+scale_y_continuous(limits=c(0,2000000))
+p <- ggplot(train, aes(int_rate,total_rev_hi_lim ))
+p +  geom_point()+scale_y_continuous(limits=c(0,2000000))
+p <- ggplot(train, aes(factor(Default),tot_coll_amt ))
+p + geom_boxplot()+scale_y_continuous(limits=c(0,500000))
+p <- ggplot(train, aes(int_rate,tot_coll_amt ))
+p +  geom_point()+scale_y_continuous(limits=c(0,500000))
+p <- ggplot(train, aes(factor(Default),tot_coll_amt ))
+p + geom_boxplot()+scale_y_continuous(limits=c(0,500000))
+p <- ggplot(train, aes(int_rate,tot_coll_amt ))
+p +  geom_point()+scale_y_continuous(limits=c(0,500000))
+```
+On testing dependency of above categorical variables on default variable, we found that it does have a relationship except acc_now_delinq. So, We will fill null values with mean or drop those rows as they are very small in numbers in other variables and drop acc_now_delinq. Also continuous variables revol_util, total_rev_hi_lim, tot_coll_amt, tot_cur_bal can be dropped. 
+```{r}
+drop<-c("revol_util", "total_rev_hi_lim", "tot_coll_amt", "tot_cur_bal","acc_now_delinq")
+train<-train[,!(names(train) %in% drop)]
+train<-train[!(is.na(train['open_acc']) | is.na(train['collections_12_mths_ex_med'])),]
+colSums(is.na(train))
+```
+Now we have cleaned data which can be used for model building. By looking the remaining features, we can find out some features which will not be necessary for model building. We need to remove them too.
+
+```{r}
+drop<-c("id","member_id","loan_status","issue_d","url","desc","addr_state")
+train<-train[,!(names(train) %in% drop)]
+```
+Now we need to convert categorical variables into integers so that they can easily participate into model. First we look the types of variables in data.
+```{r}
+str(train)
+```
+There are 18 categorical variables. We will see their relationship with target variable.
+```{r results="hide"}
+cat<-c("term","grade","sub_grade","emp_title","emp_length","home_ownership","verification_status"
+,"pymnt_plan","purpose","title","zip_code","earliest_cr_line","initial_list_status","last_pymnt_d"
+,"next_pymnt_d","last_credit_pull_d","application_type","verification_status_joint")
+for (i in 1:length(cat)){
+  chisq.test(table(train[,c('Default',cat[i])]))
+}
+```
+Lets see if default cases depends on geography or not.
+```{r}
+df<-aggregate(train$Default, by=list(train$zip_code), FUN=mean)
+df<-df[order(-df['x']),]
+ggplot(df, aes(x = Group.1, y = x)) + geom_bar(stat = "identity")
+df[1:10,]
+count(train[train["zip_code"]=='516xx',],'Default')
+count(train[train["zip_code"]=='524xx',],'Default')
+count(train[train["zip_code"]=='643xx',],'Default')
+count(train[train["zip_code"]=='682xx',],'Default')
+count(train[train["zip_code"]=='938xx',],'Default')
+count(train,'verification_status_joint')
+count(train,'verification_status')
+```
+On exploring zip codes, we found that default cases are homogeneously distributed across different geographies. So we can remove this variable from feature variables.verification_status_joint is blank for maximum observations so it also needs to be removed. 
+```{r}
+drop<-c("emp_title","title","zip_code","earliest_cr_line","last_credit_pull_d","verification_status_joint",
+        "last_pymnt_d","next_pymnt_d","last_credit_pull_d")
+train<-train[,!(names(train) %in% drop)]
+```
+Now we will explore more about important remaining categorical variables.
+term:
+```{r}
+ggplot(train, aes(factor(term),int_rate))+ geom_boxplot()
+aggregate(train$Default, by=list(train$term), FUN=mean)
+```
+emp_length:
+```{r}
+ggplot(train, aes(factor(emp_length),int_rate))+ geom_boxplot()
+aggregate(train$Default, by=list(train$emp_length), FUN=mean)
+```
+home_ownership:
+```{r}
+ggplot(train, aes(factor(home_ownership),int_rate))+ geom_boxplot()
+aggregate(train$Default, by=list(train$home_ownership), FUN=mean)
+```
+verification_status:
+```{r}
+ggplot(train, aes(factor(verification_status),int_rate))+ geom_boxplot()
+aggregate(train$Default, by=list(train$verification_status), FUN=mean)
+```
+pymnt_plan:
+```{r}
+ggplot(train, aes(factor(pymnt_plan),int_rate))+ geom_boxplot()
+aggregate(train$Default, by=list(train$pymnt_plan), FUN=mean)
+```
+purpose:
+```{r}
+ggplot(train, aes(factor(purpose),int_rate))+ geom_boxplot()
+aggregate(train$Default, by=list(train$purpose), FUN=mean)
+```
+
+Out of above explored variables pymnt_plan and purpose of loan seem to be very important in prediction while employment years seem to be least important and hence will be removed.
+```{r}
+train$emp_length<-NULL
+indx <- sapply(train, is.factor)
+train[indx] <- lapply(train[indx], function(x) as.numeric(x))
+train[is.na(train)]<-0
+```
+Now lets see scatterplot of the data in order to discard colinear vectors from data set.
+
+```{r}
+library(corrplot)
+corrplot(cor(train[,1:28]), method="circle")
+```
+```{r}
+drop<-c("funded_amnt","funded_amnt_inv","installment","out_prncp_inv","total_rec_prncp","total_pymnt_inv")
+train<-train[,!(names(train) %in% drop)]
+```
+Now we have 29 variables which w
+```{r}
+library("h2o")
+indexes = sample(1:nrow(train), size=0.3*nrow(train))
+test <- train[indexes,]
+train<- train[-indexes,]
+localH2O = h2o.init(max_mem_size = '6g',nthreads = -1)
+train[,'Default'] = as.factor(train[,'Default'])
+test[,'Default'] = as.factor(test[,'Default'])
+train_h2o = as.h2o(train)
+test_h2o = as.h2o(test)
+rm(df,a,train.col,train.r,train1,box_status,indexes,NullValues,p,q,r,RemoveColl)
+
+model =h2o.deeplearning(x = 1:28,  # column numbers for predictors
+                     y = 29,   # column number for label
+                     training_frame = train_h2o ,ignore_const_cols=FALSE# data in H2O format
+                     ) # no. of epochs
+```
+After tuning hidden layer parameter we got decent accuracy in this model. Further this accuracy can be increased by spending some more time on feature engineering and making new feature using business knowledge.
+Lets look at accuracy and other parameters of model and then test the model on new data.
+
+```{r}
+h2o.performance(model)
+h2o.performance(model, newdata =test_h2o)
+```
+
+The final model has accuracy of 98.2%, Specificity value is ~99% and recall value of around 79% for training data. The same figures for testing data is:
+Accuracy:98%
+Specificity:99%
+recall:74%
+Recall value of 74% means that there would be 26% chances of not detecting a borrower's profile to be default, which is very crucial for this business. So, we need to spend some more time to make features and try different algorithms with different tuning parameters in order to increase recall value.   
+
+
+
